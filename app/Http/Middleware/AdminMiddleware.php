@@ -1,0 +1,37 @@
+<?php
+
+namespace App\Http\Middleware;
+
+use App\Models\User;
+use Closure;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+class AdminMiddleware
+{
+    /**
+     * Handle an incoming request.
+     */
+    public function handle(Request $request, Closure $next): Response
+    {
+        // Belum login
+        if (!$request->user()) {
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized'
+            ], 401);
+        }
+
+        // Bukan admin
+        if ($request->user()->role !== User::ROLE_ADMIN) {
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Akses admin only'
+            ], 403);
+        }
+
+        return $next($request);
+    }
+}
