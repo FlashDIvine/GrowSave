@@ -47,7 +47,9 @@ return new class extends Migration
 
         // Ubah enum status dari (pending, approved, rejected)
         // menjadi (pending, settlement, expire, cancel)
-        DB::statement("ALTER TABLE payments MODIFY COLUMN status ENUM('pending', 'settlement', 'expire', 'cancel') DEFAULT 'pending'");
+        if (DB::getDriverName() !== 'sqlite') {
+            DB::statement("ALTER TABLE payments MODIFY COLUMN status ENUM('pending', 'settlement', 'expire', 'cancel') DEFAULT 'pending'");
+        }
     }
 
     /**
@@ -56,7 +58,9 @@ return new class extends Migration
     public function down(): void
     {
         // Kembalikan enum status ke semula
-        DB::statement("ALTER TABLE payments MODIFY COLUMN status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending'");
+        if (DB::getDriverName() !== 'sqlite') {
+            DB::statement("ALTER TABLE payments MODIFY COLUMN status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending'");
+        }
 
         Schema::table('payments', function (Blueprint $table) {
 

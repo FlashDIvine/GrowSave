@@ -9,6 +9,7 @@ use App\Models\Room;
 use App\Models\RoomMember;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 
@@ -22,10 +23,23 @@ class AuthController extends Controller
 
     public function register(RegisterRequest $request)
     {
+        // Tentukan role secara aman
+        $role = User::ROLE_USER;
+
+        if ($request->filled('admin_code')) {
+            if ($request->admin_code !== config('app.admin_secret_code')) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Admin code tidak valid'
+                ], 403);
+            }
+            $role = User::ROLE_ADMIN;
+        }
+
         // Cek jika user join room
         $room = null;
 
-        if ($request->role === User::ROLE_USER) {
+        if ($role === User::ROLE_USER) {
 
             if (!$request->room_code) {
                 return response()->json([
@@ -46,71 +60,79 @@ class AuthController extends Controller
             }
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | CREATE USER
-        |--------------------------------------------------------------------------
-        */
+        // Jalankan database transaction untuk menghindari partial state
+        $data = DB::transaction(function () use ($request, $role, $room) {
+            /*
+            |--------------------------------------------------------------------------
+            | CREATE USER
+            |--------------------------------------------------------------------------
+            */
 
-        $user = User::create([
-            'name' => $request->name,
+            $user = User::create([
+                'name' => $request->name,
 
-            'email' => $request->email,
+                'email' => $request->email,
 
-            'password' => Hash::make($request->password),
+                'password' => Hash::make($request->password),
 
-            'role' => $request->role
-        ]);
-
-        /*
-        |--------------------------------------------------------------------------
-        | ADMIN CREATE ROOM
-        |--------------------------------------------------------------------------
-        */
-
-        if ($user->role === User::ROLE_ADMIN) {
-
-            do {
-                $roomCode = 'ROOM-' . Str::upper(Str::random(6));
-            } while (Room::where('room_code', $roomCode)->exists());
-
-            Room::create([
-                'admin_id' => $user->id,
-
-                'room_name' => $user->name . "'s Room",
-
-                'room_code' => $roomCode,
-
-                'description' => null,
-
-                'status' => Room::STATUS_ACTIVE
+                'role' => $role
             ]);
-        }
 
-        /*
-        |--------------------------------------------------------------------------
-        | USER JOIN ROOM
-        |--------------------------------------------------------------------------
-        */
+            /*
+            |--------------------------------------------------------------------------
+            | ADMIN CREATE ROOM
+            |--------------------------------------------------------------------------
+            */
 
-        if ($user->role === User::ROLE_USER) {
+            if ($user->role === User::ROLE_ADMIN) {
 
-            RoomMember::create([
-                'room_id' => $room->id,
+                do {
+                    $roomCode = 'ROOM-' . Str::upper(Str::random(6));
+                } while (Room::where('room_code', $roomCode)->exists());
 
-                'user_id' => $user->id,
+                Room::create([
+                    'admin_id' => $user->id,
 
-                'status' => RoomMember::STATUS_PENDING
-            ]);
-        }
+                    'room_name' => $user->name . "'s Room",
 
-        /*
-        |--------------------------------------------------------------------------
-        | CREATE TOKEN
-        |--------------------------------------------------------------------------
-        */
+                    'room_code' => $roomCode,
 
-        $token = $user->createToken('auth-token')->plainTextToken;
+                    'description' => null,
+
+                    'status' => Room::STATUS_ACTIVE
+                ]);
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | USER JOIN ROOM
+            |--------------------------------------------------------------------------
+            */
+
+            if ($user->role === User::ROLE_USER) {
+
+                RoomMember::create([
+                    'room_id' => $room->id,
+
+                    'user_id' => $user->id,
+
+                    'status' => RoomMember::STATUS_PENDING
+                ]);
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | CREATE TOKEN
+            |--------------------------------------------------------------------------
+            */
+
+            $token = $user->createToken('auth-token')->plainTextToken;
+
+            return [
+                'token' => $token,
+                'user' => $user
+            ];
+        });
 
         /*
         |--------------------------------------------------------------------------
@@ -121,10 +143,7 @@ class AuthController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Register berhasil',
-            'data' => [
-                'token' => $token,
-                'user' => $user
-            ]
+            'data' => $data
         ], 201);
     }
 

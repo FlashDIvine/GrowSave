@@ -26,9 +26,11 @@ class RegisterRequest extends FormRequest
 
             'password' => 'required|min:6',
 
-            'role' => 'required|in:admin,user',
+            'role' => 'nullable|in:admin,user',
 
-            'room_code' => 'nullable|string'
+            'room_code' => 'nullable|string',
+
+            'admin_code' => 'nullable|string'
         ];
     }
 }

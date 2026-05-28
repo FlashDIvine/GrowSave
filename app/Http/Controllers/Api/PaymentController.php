@@ -7,6 +7,7 @@ use App\Models\Bill;
 use App\Models\Payment;
 use App\Models\RoomMember;
 use App\Models\User;
+use App\Models\Transaction;
 use Illuminate\Http\Request;
 use Midtrans\Config as MidtransConfig;
 use Midtrans\Snap;
@@ -99,15 +100,23 @@ class PaymentController extends Controller
 
         $bill = Bill::where('id', $request->bill_id)
             ->where('room_id', $roomId)
-            ->where('status', Bill::STATUS_ACTIVE)
             ->first();
 
         if (!$bill) {
 
             return response()->json([
                 'success' => false,
-                'message' => 'Tagihan tidak ditemukan atau sudah ditutup'
+                'message' => 'Tagihan tidak ditemukan'
             ], 404);
+        }
+
+        // Tolak jika iuran sudah diselesaikan / ditutup secara manual oleh Admin
+        if ($bill->is_completed || $bill->status === Bill::STATUS_CLOSED) {
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Iuran ini sudah diselesaikan/ditutup oleh Admin'
+            ], 400);
         }
 
         /*
@@ -174,7 +183,7 @@ class PaymentController extends Controller
         $params = [
             'transaction_details' => [
                 'order_id' => 'GROWSAVE-PAY-' . $payment->id,
-                'gross_amount' => (int) $bill->amount,
+                'gross_amount' => (int) $bill->required_amount,
             ],
             'customer_details' => [
                 'first_name' => $user->name,
@@ -183,7 +192,7 @@ class PaymentController extends Controller
             'item_details' => [
                 [
                     'id' => 'BILL-' . $bill->id,
-                    'price' => (int) $bill->amount,
+                    'price' => (int) $bill->required_amount,
                     'quantity' => 1,
                     'name' => $bill->title,
                 ]
@@ -247,6 +256,17 @@ class PaymentController extends Controller
         $transactionId = $request->transaction_id;
         $signatureKey = $request->signature_key;
 
+        // Log the incoming request details for diagnostic visibility
+        \Illuminate\Support\Facades\Log::info('Midtrans Webhook: Request received', [
+            'order_id' => $orderId,
+            'status_code' => $statusCode,
+            'gross_amount' => $grossAmount,
+            'transaction_status' => $transactionStatus,
+            'payment_type' => $paymentType,
+            'transaction_id' => $transactionId,
+            'signature_key' => $signatureKey
+        ]);
+
         /*
         |--------------------------------------------------------------------------
         | VERIFIKASI SIGNATURE KEY
@@ -255,11 +275,25 @@ class PaymentController extends Controller
 
         $serverKey = config('midtrans.server_key');
 
-        $expectedSignature = hash('sha512',
-            $orderId . $statusCode . $grossAmount . $serverKey
-        );
+        // Midtrans gross_amount is formatted as decimal (e.g. "10000.00").
+        // To prevent signature failures, we test against raw string, formatted decimal, and integer.
+        $grossAmountFormatted = number_format((float)$grossAmount, 2, '.', '');
+        
+        $expectedSignatureRaw = hash('sha512', $orderId . $statusCode . $grossAmount . $serverKey);
+        $expectedSignatureDec = hash('sha512', $orderId . $statusCode . $grossAmountFormatted . $serverKey);
+        $expectedSignatureInt = hash('sha512', $orderId . $statusCode . (int)$grossAmount . $serverKey);
 
-        if ($signatureKey !== $expectedSignature) {
+        if ($signatureKey !== $expectedSignatureRaw && 
+            $signatureKey !== $expectedSignatureDec && 
+            $signatureKey !== $expectedSignatureInt) {
+
+            \Illuminate\Support\Facades\Log::error('Midtrans Webhook: Invalid signature key', [
+                'order_id' => $orderId,
+                'received_signature' => $signatureKey,
+                'expected_raw' => $expectedSignatureRaw,
+                'expected_decimal' => $expectedSignatureDec,
+                'expected_integer' => $expectedSignatureInt
+            ]);
 
             return response()->json([
                 'success' => false,
@@ -276,19 +310,9 @@ class PaymentController extends Controller
         // Format order_id: GROWSAVE-PAY-{payment_id}
         $paymentId = str_replace('GROWSAVE-PAY-', '', $orderId);
 
-        $payment = Payment::find($paymentId);
-
-        if (!$payment) {
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Payment tidak ditemukan'
-            ], 404);
-        }
-
         /*
         |--------------------------------------------------------------------------
-        | UPDATE STATUS BERDASARKAN TRANSACTION STATUS
+        | UPDATE STATUS BERDASARKAN TRANSACTION STATUS (ATOMIC & IDEMPOTENT)
         |--------------------------------------------------------------------------
         */
 
@@ -296,42 +320,83 @@ class PaymentController extends Controller
         $paidAt = null;
 
         if ($transactionStatus === 'capture' || $transactionStatus === 'settlement') {
-
             $newStatus = Payment::STATUS_SETTLEMENT;
             $paidAt = now();
-
         } elseif ($transactionStatus === 'pending') {
-
             $newStatus = Payment::STATUS_PENDING;
-
         } elseif ($transactionStatus === 'deny' || $transactionStatus === 'cancel') {
-
             $newStatus = Payment::STATUS_CANCEL;
-
         } elseif ($transactionStatus === 'expire') {
-
             $newStatus = Payment::STATUS_EXPIRE;
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | UPDATE PAYMENT
-        |--------------------------------------------------------------------------
-        */
-
         if ($newStatus) {
+            try {
+                \Illuminate\Support\Facades\DB::transaction(function () use ($paymentId, $newStatus, $transactionId, $paymentType, $paidAt) {
+                    // Pessimistic row locking to prevent race conditions
+                    $payment = Payment::where('id', $paymentId)->lockForUpdate()->first();
 
-            $updateData = [
-                'status' => $newStatus,
-                'transaction_id' => $transactionId,
-                'payment_type' => $paymentType,
-            ];
+                    if (!$payment) {
+                        throw new \Exception("Payment dengan ID {$paymentId} tidak ditemukan");
+                    }
 
-            if ($paidAt) {
-                $updateData['paid_at'] = $paidAt;
+                    // Idempotency check: if already settled, skip duplicate operations
+                    if ($payment->status === Payment::STATUS_SETTLEMENT) {
+                        \Illuminate\Support\Facades\Log::info("Midtrans Webhook: Payment {$paymentId} is already settled (idempotent block). Bypassing.");
+                        return;
+                    }
+
+                    $oldStatus = $payment->status;
+                    $updateData = [
+                        'status' => $newStatus,
+                        'transaction_id' => $transactionId,
+                        'payment_type' => $paymentType,
+                    ];
+
+                    if ($paidAt) {
+                        $updateData['paid_at'] = $paidAt;
+                    }
+
+                    $payment->update($updateData);
+
+                    // Create a local transaction record when payment transitions to settlement
+                    if ($newStatus === Payment::STATUS_SETTLEMENT && $oldStatus !== Payment::STATUS_SETTLEMENT) {
+                        $bill = $payment->bill;
+
+                        // Increment collected_amount on the bill (safe float conversion)
+                        $bill->increment('collected_amount', (float) $bill->required_amount);
+
+                        // Ensure a transaction for this payment doesn't already exist to prevent duplicates
+                        $exists = Transaction::where('room_id', $bill->room_id)
+                            ->where('user_id', $payment->user_id)
+                            ->where('category', 'Pembayaran Tagihan')
+                            ->where('description', 'like', "%Pembayaran iuran: {$bill->title}. Source: bill payment, Reference ID: {$payment->id}%")
+                            ->exists();
+
+                        if (!$exists) {
+                            Transaction::create([
+                                'room_id' => $bill->room_id,
+                                'user_id' => $payment->user_id,
+                                'type' => 'in', // mutated to 'in' and serialized as 'income'
+                                'category' => 'Pembayaran Tagihan',
+                                'amount' => (float) $bill->required_amount,
+                                'transaction_date' => $paidAt ?? now(),
+                                'description' => "Pembayaran iuran: {$bill->title}. Source: bill payment, Reference ID: {$payment->id}"
+                            ]);
+                        }
+                    }
+                });
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::error('Midtrans Webhook: Transaction processing failed', [
+                    'payment_id' => $paymentId,
+                    'error' => $e->getMessage()
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Gagal memproses transaksi: ' . $e->getMessage()
+                ], 500);
             }
-
-            $payment->update($updateData);
         }
 
         return response()->json([

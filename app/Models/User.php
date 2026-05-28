@@ -101,4 +101,24 @@ class User extends Authenticatable
     {
         return $this->hasMany(Payment::class);
     }
+
+    /**
+     * Accessor untuk mendapatkan room_id secara dinamis.
+     * Dapat diakses via $user->room_id.
+     *
+     * @return int|null
+     */
+    public function getRoomIdAttribute()
+    {
+        if ($this->isAdmin()) {
+            return $this->room?->id;
+        }
+
+        $membership = RoomMember::where('user_id', $this->id)
+            ->where('status', RoomMember::STATUS_APPROVED)
+            ->latest()
+            ->first();
+
+        return $membership?->room_id;
+    }
 }

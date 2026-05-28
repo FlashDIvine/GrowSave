@@ -123,4 +123,16 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Admin Secret Code
+    |--------------------------------------------------------------------------
+    |
+    | Used to authorize registration of administrative accounts.
+    |
+    */
+
+    'admin_secret_code' => env('ADMIN_SECRET_CODE', 'growsave2026'),
+
 ];
+

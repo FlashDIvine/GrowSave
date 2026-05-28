@@ -20,7 +20,7 @@ class StoreTransactionRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'type' => 'required|in:in,out',
+            'type' => 'required|in:in,out,income,expense',
             
             'category' => 'required|string|max:255',
             

@@ -24,7 +24,11 @@ class StoreBillRequest extends FormRequest
 
             'description' => 'nullable|string',
 
-            'amount' => 'required|numeric|min:0',
+            'amount' => 'nullable|numeric|min:0',
+
+            'target_amount' => 'required|numeric|min:0',
+
+            'required_amount' => 'required|numeric|min:0',
 
             'due_date' => 'required|date',
 

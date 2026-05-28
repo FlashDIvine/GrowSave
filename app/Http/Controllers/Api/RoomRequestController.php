@@ -133,4 +133,38 @@ class RoomRequestController extends Controller
             'data' => $member
         ]);
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | LIST APPROVED ROOM MEMBERS (RESIDENTS)
+    |--------------------------------------------------------------------------
+    */
+
+    public function residents(Request $request)
+    {
+        $admin = $request->user();
+
+        // Ambil room milik admin
+        $room = $admin->room;
+
+        if (!$room) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Room tidak ditemukan'
+            ], 404);
+        }
+
+        // Ambil semua member approved dengan sorting joined_at desc
+        $residents = RoomMember::with('user')
+            ->where('room_id', $room->id)
+            ->where('status', RoomMember::STATUS_APPROVED)
+            ->orderBy('joined_at', 'desc')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Daftar penghuni aktif',
+            'data' => $residents
+        ]);
+    }
 }

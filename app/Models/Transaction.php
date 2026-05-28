@@ -63,4 +63,30 @@ class Transaction extends Model
     {
         return $this->belongsTo(User::class);
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | ACCESSORS & MUTATORS
+    |--------------------------------------------------------------------------
+    */
+
+    /**
+     * Accessor untuk type.
+     * Mengubah format database 'in' -> 'income', 'out' -> 'expense'
+     * agar sesuai dengan kebutuhan serialisasi data aplikasi Android.
+     */
+    public function getTypeAttribute($value)
+    {
+        return $value === 'in' ? 'income' : 'expense';
+    }
+
+    /**
+     * Mutator untuk type.
+     * Mengubah format input dari aplikasi 'income'/'in' -> 'in', 'expense'/'out' -> 'out'
+     * sebelum disimpan ke database.
+     */
+    public function setTypeAttribute($value)
+    {
+        $this->attributes['type'] = ($value === 'income' || $value === 'in') ? 'in' : 'out';
+    }
 }

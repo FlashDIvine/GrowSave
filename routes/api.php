@@ -60,6 +60,8 @@ Route::middleware(['auth:sanctum', 'admin'])->group(function () {
 
     Route::get('/room/requests', [RoomRequestController::class, 'index']);
 
+    Route::get('/room/residents', [RoomRequestController::class, 'residents']);
+
     Route::post('/room/approve/{id}', [RoomRequestController::class, 'approve']);
 
     Route::post('/room/reject/{id}', [RoomRequestController::class, 'reject']);
@@ -87,6 +89,8 @@ Route::middleware(['auth:sanctum', 'admin'])->group(function () {
     Route::put('/bills/{id}', [BillController::class, 'update']);
 
     Route::delete('/bills/{id}', [BillController::class, 'destroy']);
+
+    Route::post('/bills/{id}/complete', [BillController::class, 'complete']);
 
     /*
     |--------------------------------------------------------------------------

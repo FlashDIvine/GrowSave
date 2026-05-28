@@ -174,7 +174,11 @@ class BillController extends Controller
 
             'description' => $request->description,
 
-            'amount' => $request->amount,
+            'amount' => $request->required_amount, // Set amount to required_amount for backward compatibility
+
+            'target_amount' => $request->target_amount,
+
+            'required_amount' => $request->required_amount,
 
             'due_date' => $request->due_date,
 
@@ -304,6 +308,69 @@ class BillController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Tagihan berhasil dihapus'
+        ]);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | COMPLETE — SELESAIKAN TAGIHAN SECARA MANUAL OLEH ADMIN
+    |--------------------------------------------------------------------------
+    */
+
+    public function complete(Request $request, $id)
+    {
+        $admin = $request->user();
+
+        if ($admin->role !== User::ROLE_ADMIN) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Hanya admin yang dapat menutup iuran ini'
+            ], 403);
+        }
+
+        $room = $admin->room;
+        if (!$room) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Room tidak ditemukan'
+            ], 404);
+        }
+
+        $bill = Bill::where('id', $id)
+            ->where('room_id', $room->id)
+            ->first();
+
+        if (!$bill) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Tagihan tidak ditemukan'
+            ], 404);
+        }
+
+        if ($bill->is_completed) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Tagihan sudah diselesaikan/ditutup'
+            ], 400);
+        }
+
+        $bill->update([
+            'is_completed' => true,
+            'completed_at' => now(),
+            'status' => Bill::STATUS_CLOSED
+        ]);
+
+        // Batalkan seluruh transaksi/pembayaran pending warga untuk iuran ini
+        \App\Models\Payment::where('bill_id', $bill->id)
+            ->where('status', \App\Models\Payment::STATUS_PENDING)
+            ->update([
+                'status' => \App\Models\Payment::STATUS_CANCEL
+            ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Tagihan berhasil diselesaikan dan dinonaktifkan',
+            'data' => $bill
         ]);
     }
 }
